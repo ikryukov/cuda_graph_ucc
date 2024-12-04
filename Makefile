@@ -5,10 +5,10 @@ NVCCFLAGS = -O2 -arch=sm_80
 CXXFLAGS = -Wall -O2 -std=c++11
 
 # Paths
-CUDA_INC = /usr/local/cuda-12.4/include
-CUDA_LIB = /usr/local/cuda-12.4/lib64
-UCC_INC = /home/ikryukov/work/ucc/install/include
-UCC_LIB = /home/ikryukov/work/ucc/install/lib
+CUDA_INC = ${CUDA_HOME}/include
+CUDA_LIB = ${CUDA_HOME}/lib64
+UCC_INC = ${HPCX_UCC_DIR}/include
+UCC_LIB = ${HPCX_UCC_DIR}/lib
 
 # Libraries
 LIBS = -lcudart -lucc

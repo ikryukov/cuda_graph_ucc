@@ -31,7 +31,7 @@
         } \
     } while (0)
 
-void run_allgather_with_cuda_graph(ucc_team_h team, int rank, int size, int N) {
+void run_allgather_with_cuda_graph(ucc_team_h team, ucc_context_h ctx, int rank, int size, int N) {
     float *d_sendbuf, *d_recvbuf;
     size_t bytes = N * sizeof(float);
 
@@ -46,11 +46,6 @@ void run_allgather_with_cuda_graph(ucc_team_h team, int rank, int size, int N) {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
     
-    cudaGraph_t graph;
-    cudaGraphExec_t graph_exec;
-
-    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-
     // UCC allgather collective
     ucc_coll_req_h req;
     ucc_coll_args_t args;
@@ -64,9 +59,31 @@ void run_allgather_with_cuda_graph(ucc_team_h team, int rank, int size, int N) {
     args.dst.info.count = N * size;
     args.dst.info.datatype = UCC_DT_FLOAT32;
     args.dst.info.mem_type = UCC_MEMORY_TYPE_CUDA;
-
     UCC_CHECK(ucc_collective_init(&args, &req, team));
-    UCC_CHECK(ucc_collective_post(req));
+
+    ucc_ev_t comp_ev, *post_ev;
+    comp_ev.ev_type = UCC_EVENT_COMPUTE_COMPLETE;
+    comp_ev.ev_context = nullptr;
+    comp_ev.ev_context_size = 0;
+    comp_ev.req = req;
+
+    ucc_ee_h ee = nullptr;
+
+    ucc_ee_params_t ee_params;
+    ee_params.ee_type         = UCC_EE_CUDA_STREAM;
+    ee_params.ee_context_size = sizeof(cudaStream_t);
+    ee_params.ee_context      = stream;
+    UCC_CHECK(ucc_ee_create(team, &ee_params, &ee));
+
+    cudaGraph_t graph;
+    cudaGraphExec_t graph_exec;
+
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+
+    UCC_CHECK(ucc_collective_triggered_post(ee, &comp_ev));
+    ucc_status_t st = ucc_ee_get_event(ee, &post_ev);
+
+    ucc_ee_ack_event(ee, post_ev);
 
     // Capture collective in CUDA graph
     CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
@@ -76,12 +93,15 @@ void run_allgather_with_cuda_graph(ucc_team_h team, int rank, int size, int N) {
     CUDA_CHECK(cudaGraphLaunch(graph_exec, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
+    // Cleanup graph
+    CUDA_CHECK(cudaGraphExecDestroy(graph_exec));
+    CUDA_CHECK(cudaGraphDestroy(graph));
+
     // Cleanup
     UCC_CHECK(ucc_collective_finalize(req));
     CUDA_CHECK(cudaFree(d_sendbuf));
     CUDA_CHECK(cudaFree(d_recvbuf));
-    CUDA_CHECK(cudaGraphExecDestroy(graph_exec));
-    CUDA_CHECK(cudaGraphDestroy(graph));
+
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 
@@ -186,7 +206,7 @@ int main(int argc, char **argv) {
 
     team = create_ucc_team(MPI_COMM_WORLD, ctx);
 
-    run_allgather_with_cuda_graph(team, rank, size, 1024);
+    run_allgather_with_cuda_graph(team, ctx, rank, size, 1024);
 
     /* Cleanup UCC */
     UCC_CHECK(ucc_team_destroy(team));
